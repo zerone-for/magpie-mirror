@@ -1,0 +1,67 @@
+name: Sync magpie image to Docker Hub
+
+# 每天 UTC 05:17(北京时间 13:17)比对并同步;push 时也跑一次(首推送即首同步)
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # 仅供底部 keepalive 步骤推送空 commit
+
+env:
+  SRC: ghcr.io/yetone/magpie
+  TAGS: latest stable # magpie 官方 tag;edge 更新太频繁,版本号 tag 只增不减,均不同步
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      - name: Log in to Docker Hub
+        run: skopeo login docker.io -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Sync changed tags
+        env:
+          DST: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/magpie
+        run: |
+          set -euo pipefail
+          for TAG in $TAGS; do
+            SRC_REF="docker://$SRC:$TAG"
+            DST_REF="docker://$DST:$TAG"
+
+            SRC_DIGEST=$(skopeo inspect "$SRC_REF" | jq -r .Digest)
+            if DST_DIGEST=$(skopeo inspect "$DST_REF" 2>/dev/null | jq -r .Digest) \
+               && [ "$DST_DIGEST" = "$SRC_DIGEST" ]; then
+              echo "::notice::$TAG 未变化($SRC_DIGEST)"
+              continue
+            fi
+
+            echo "::notice::$TAG: ${DST_DIGEST:-<不存在>} -> $SRC_DIGEST,开始复制"
+            # --all 保留多架构 manifest list(amd64 / arm64)
+            skopeo copy --all --retry-times 5 "$SRC_REF" "$DST_REF"
+          done
+
+      # GitHub 会停用 60 天无活动的仓库的定时 workflow,每月 1 号推一个空 commit 保活
+      - name: Monthly keepalive
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d)" != "01" ]; then
+            echo "not the 1st, skip"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive (avoid scheduled workflow disable)"
+          git push
