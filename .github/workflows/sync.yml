@@ -70,29 +70,26 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          LOGIN=$(curl -s -w "\n%{http_code}" -H "Content-Type: application/json" \
-            -d "{\"username\":\"$DOCKERHUB_USERNAME\",\"password\":\"$DOCKERHUB_TOKEN\"}" \
-            https://hub.docker.com/v2/users/login)
-          JWT=$(echo "$LOGIN" | head -n -1 | jq -r .token)
-          if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
-            echo "::error::Docker Hub API 登录失败: $LOGIN"
+          # 当前 Docker Hub API:POST /v2/auth/token 换取 Bearer token(老 /v2/users/login + JWT 已无仓库写权限)
+          TOKEN=$(curl -s -w "\n%{http_code}" -H "Content-Type: application/json" \
+            -d "{\"identifier\":\"$DOCKERHUB_USERNAME\",\"secret\":\"$DOCKERHUB_TOKEN\"}" \
+            https://hub.docker.com/v2/auth/token)
+          HTTP=$(echo "$TOKEN" | tail -n 1)
+          ACCESS=$(echo "$TOKEN" | head -n -1 | jq -r .access_token)
+          if [ "$HTTP" != "200" ] || [ -z "$ACCESS" ] || [ "$ACCESS" = "null" ]; then
+            echo "::error::Docker Hub API 登录失败 HTTP $HTTP: $(echo "$TOKEN" | head -n -1)"
             exit 1
           fi
           jq -n --arg d "$(cat DOCKERHUB.md)" \
             '{full_description: $d,
               description: "Unofficial mirror of ghcr.io/yetone/magpie (magpie by yetone), synced daily"}' \
             > /tmp/payload.json
-          # Docker Hub API 部分更新用 PATCH;405 时回退 PUT 兼容旧版行为
-          RESP=""
-          for METHOD in PATCH PUT; do
-            RESP=$(curl -s -w "\n%{http_code}" -X "$METHOD" -H "Authorization: JWT $JWT" \
-              -H "Content-Type: application/json" -d @/tmp/payload.json \
-              "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/magpie/")
-            HTTP=$(echo "$RESP" | tail -n 1)
-            [ "$HTTP" != "405" ] && break
-          done
+          RESP=$(curl -s -w "\n%{http_code}" -X PATCH -H "Authorization: Bearer $ACCESS" \
+            -H "Content-Type: application/json" -d @/tmp/payload.json \
+            "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/magpie")
+          HTTP=$(echo "$RESP" | tail -n 1)
           BODY=$(echo "$RESP" | head -n -1)
-          echo "HTTP $HTTP: $(echo "$BODY" | jq -r '.name // .message // empty')"
+          echo "HTTP $HTTP"
           if [ "$HTTP" != "200" ]; then
             echo "::error::更新描述失败 HTTP $HTTP: $BODY"
             exit 1
