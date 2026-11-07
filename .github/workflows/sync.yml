@@ -26,6 +26,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq skopeo
 
+      - name: Check secrets
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN 未设置,请到 Settings → Secrets and variables → Actions 添加"
+            exit 1
+          fi
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Log in to Docker Hub
         run: skopeo login docker.io -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
         env:
