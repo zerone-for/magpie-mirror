@@ -1,46 +1,45 @@
 # magpie-mirror
 
-把 [yetone/magpie](https://github.com/yetone/magpie) 的 Docker 镜像从 `ghcr.io/yetone/magpie`
-自动同步到 Docker Hub(`docker.io/<你的用户名>/magpie`),绕开 ghcr.io 访问不稳定的问题。
+[magpie](https://github.com/yetone/magpie) 的 Docker 镜像自动同步器:每天定时比对官方
+`ghcr.io/yetone/magpie` 与 Docker Hub 上的镜像 digest,有更新就用 skopeo 注册表对注册表复制,
+内容逐字节一致(digest 由 registry 校验),未经任何改动。
 
-官方只发布到 ghcr.io(见其 docker*.yml workflows),本仓库只是一个**非官方搬运镜像**,
-skopeo 直接做注册表到注册表的复制,内容哈希由 registry 校验,不经手改动。
+- **magpie 作者**:yetone — https://github.com/yetone/magpie
+- **官方镜像**:`ghcr.io/yetone/magpie`(官方文档:[usemagpie.ai/docs/docker](https://usemagpie.ai/docs/docker))
+- **同步产物**:https://hub.docker.com/r/zeronefour/magpie
+
+## 使用镜像
+
+```sh
+docker pull zeronefour/magpie:latest   # 最新 release
+docker pull zeronefour/magpie:stable   # Stable 渠道对应镜像
+```
+
+ghcr.io 访问不稳的环境,直接拉这个就行。
 
 ## 同步范围
 
-- `latest` — 最新 release
-- `stable` — 桌面版 Stable 渠道对应镜像
+| Tag | 说明 |
+| --- | --- |
+| `latest` | 最新 release |
+| `stable` | Stable 渠道对应镜像 |
 
 不同步:`daily`(与 latest 高度重合)、`edge`(随 main 每次提交变动,太频繁)、历史版本号 tag。
 
-## 一次性的设置
+## 自己搭一个同样的
 
-1. 在 Docker Hub 创建 **Access Token**:Account Settings → Security → New Access Token
-   (权限 Read/Write 即可,不要用账号密码)。
-2. 在 GitHub 创建公开仓库,推入本目录内容:
-   ```sh
-   cd magpie-mirror
-   git init && git add -A && git commit -m "magpie mirror sync"
-   git remote add origin git@github.com:<你的用户名>/magpie-mirror.git
-   git push -u origin main
-   ```
-3. 仓库 Settings → Secrets and variables → Actions,添加两个 secret:
+相同需求(把任意 ghcr 镜像搬到 Docker Hub)可以复用这套流程:
+
+1. Fork 本仓库(或复制 [.github/workflows/sync.yml](.github/workflows/sync.yml) 到你的仓库)
+2. 改 workflow 顶部的 `SRC` 和 `TAGS` 为你要同步的官方镜像与 tag
+3. 改「Sync changed tags」步骤里的 `DST` 环境变量,指向 `docker.io/<你的用户名>/<仓库名>`
+4. 到仓库 Settings → Secrets and variables → Actions 添加:
    - `DOCKERHUB_USERNAME` — Docker Hub 用户名
-   - `DOCKERHUB_TOKEN` — 上一步的 Access Token
-4. 到 Actions 页手动 Run workflow 一次,验证首同步成功,之后每天 UTC 05:17 自动跑。
+   - `DOCKERHUB_TOKEN` — Docker Hub Access Token(Account Settings → Security → New Access Token,Read/Write 权限)
+5. 推送即首同步,之后每天 UTC 05:17 自动比对更新
 
-## 日常使用
+注意事项:
 
-NAS 上拉取:
-
-```sh
-docker pull <你的DockerHub用户名>/magpie:latest
-```
-
-digest 与 ghcr 官方一致(可用 `skopeo inspect` 对比核验)。
-
-## 注意
-
-- GitHub 会停用 60 天无活动的定时 workflow;workflow 内置了每月 1 号的空 commit 保活,
-  平时不需要管。
-- 若 Docker Hub 仓库被删或 token 失效,Actions 会在日志里报 401/403,重新生成 token 更新 secret 即可。
+- 同步的是公开镜像,无需 ghcr 凭据;目标仓库首次推送时 Docker Hub 会自动创建
+- GitHub 会对 60 天无活动的仓库停用定时 workflow,workflow 内置了每月 1 号的空 commit 保活
+- 搬运他人镜像请保留来源与作者署名,标注非官方,不要误导为官方渠道
