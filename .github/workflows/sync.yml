@@ -63,6 +63,28 @@ jobs:
             skopeo copy --all --retry-times 5 "$SRC_REF" "$DST_REF"
           done
 
+      # 仅推代码时同步镜像页描述;每日定时跑时不重复
+      - name: Update Docker Hub description
+        if: github.event_name == 'push'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          JWT=$(curl -s -H "Content-Type: application/json" \
+            -d "{\"username\":\"$DOCKERHUB_USERNAME\",\"password\":\"$DOCKERHUB_TOKEN\"}" \
+            https://hub.docker.com/v2/users/login | jq -r .token)
+          if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
+            echo "::error::Docker Hub API 登录失败,无法更新描述"
+            exit 1
+          fi
+          jq -n --arg d "$(cat DOCKERHUB.md)" \
+            '{full_description: $d,
+              description: "Unofficial mirror of ghcr.io/yetone/magpie (magpie by yetone), synced daily"}' \
+            > /tmp/payload.json
+          curl -s -X PUT -H "Authorization: JWT $JWT" -H "Content-Type: application/json" \
+            -d @/tmp/payload.json \
+            "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/magpie/" | jq -r '.name // .message'
+
       # GitHub 会停用 60 天无活动的仓库的定时 workflow,每月 1 号推一个空 commit 保活
       - name: Monthly keepalive
         if: github.event_name == 'schedule'
