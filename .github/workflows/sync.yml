@@ -82,10 +82,15 @@ jobs:
             '{full_description: $d,
               description: "Unofficial mirror of ghcr.io/yetone/magpie (magpie by yetone), synced daily"}' \
             > /tmp/payload.json
-          RESP=$(curl -s -w "\n%{http_code}" -X PUT -H "Authorization: JWT $JWT" \
-            -H "Content-Type: application/json" -d @/tmp/payload.json \
-            "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/magpie/")
-          HTTP=$(echo "$RESP" | tail -n 1)
+          # Docker Hub API 部分更新用 PATCH;405 时回退 PUT 兼容旧版行为
+          RESP=""
+          for METHOD in PATCH PUT; do
+            RESP=$(curl -s -w "\n%{http_code}" -X "$METHOD" -H "Authorization: JWT $JWT" \
+              -H "Content-Type: application/json" -d @/tmp/payload.json \
+              "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/magpie/")
+            HTTP=$(echo "$RESP" | tail -n 1)
+            [ "$HTTP" != "405" ] && break
+          done
           BODY=$(echo "$RESP" | head -n -1)
           echo "HTTP $HTTP: $(echo "$BODY" | jq -r '.name // .message // empty')"
           if [ "$HTTP" != "200" ]; then
