@@ -13,7 +13,8 @@ permissions:
 
 env:
   SRC: ghcr.io/yetone/magpie
-  TAGS: latest stable # magpie 官方 tag;edge 更新太频繁,版本号 tag 只增不减,均不同步
+  MOVING_TAGS: latest stable # 跟随上游移动的 tag;edge 更新太频繁,不同步
+  VERSION_KEEP: "10"         # 保留最近多少个版本号 tag(0.1.xxxx),用于回滚
 
 jobs:
   sync:
@@ -42,12 +43,12 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Sync changed tags
+      - name: Sync moving tags
         env:
           DST: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/magpie
         run: |
           set -euo pipefail
-          for TAG in $TAGS; do
+          for TAG in $MOVING_TAGS; do
             SRC_REF="docker://$SRC:$TAG"
             DST_REF="docker://$DST:$TAG"
 
@@ -61,6 +62,26 @@ jobs:
             echo "::notice::$TAG: ${DST_DIGEST:-<不存在>} -> $SRC_DIGEST,开始复制"
             # --all 保留多架构 manifest list(amd64 / arm64)
             skopeo copy --all --retry-times 5 "$SRC_REF" "$DST_REF"
+          done
+
+      # 版本号 tag(如 0.1.1150):只补最近 VERSION_KEEP 个中缺失的,已同步的不重复搬
+      - name: Sync recent version tags
+        env:
+          DST: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/magpie
+        run: |
+          set -euo pipefail
+          SRC_VERSIONS=$(skopeo list-tags "docker://$SRC" | jq -r '.Tags[]' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n "$VERSION_KEEP")
+          HUB_TAGS=$(skopeo list-tags "docker://$DST" 2>/dev/null | jq -r '.Tags[]?' || true)
+          MISSING=$(comm -23 <(echo "$SRC_VERSIONS" | sort) <(echo "$HUB_TAGS" | sort))
+          echo "上游最近版本: $(echo $SRC_VERSIONS | tr '\n' ' ')"
+          if [ -z "$MISSING" ]; then
+            echo "::notice::最近版本号均已同步"
+            exit 0
+          fi
+          for TAG in $MISSING; do
+            echo "::notice::补同步版本 $TAG"
+            skopeo copy --all --retry-times 5 "docker://$SRC:$TAG" "docker://$DST:$TAG"
           done
 
       # 仅推代码时同步镜像页描述;每日定时跑时不重复

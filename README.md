@@ -11,8 +11,9 @@
 ## 使用镜像
 
 ```sh
-docker pull zeronefour/magpie:latest   # 最新 release
-docker pull zeronefour/magpie:stable   # Stable 渠道对应镜像
+docker pull zeronefour/magpie:latest      # 最新 release
+docker pull zeronefour/magpie:stable      # Stable 渠道对应镜像
+docker pull zeronefour/magpie:0.1.1150    # 固定版本,可回滚
 ```
 
 ghcr.io 访问不稳的环境,直接拉这个就行。
@@ -21,21 +22,24 @@ ghcr.io 访问不稳的环境,直接拉这个就行。
 
 | Tag | 说明 |
 | --- | --- |
-| `latest` | 最新 release |
-| `stable` | Stable 渠道对应镜像 |
+| `latest` | 最新 release(移动标签) |
+| `stable` | Stable 渠道对应镜像(移动标签) |
+| `0.1.xxxx` | 版本号标签,保留**最近 10 个**,新版本自动补同步 |
 
-不同步:`daily`(与 latest 高度重合)、`edge`(随 main 每次提交变动,太频繁)、历史版本号 tag。
+不同步:`daily`(与 latest 高度重合)、`edge`(随 main 每次提交变动,太频繁)、
+更早的历史版本(每个版本约几十 MB,全量回填不现实;如需某个老版本,改大
+workflow 里的 `VERSION_KEEP` 再手动触发一次即可)。
 
 ## 自己搭一个同样的
 
 相同需求(把任意 ghcr 镜像搬到 Docker Hub)可以复用这套流程:
 
 1. Fork 本仓库(或复制 [.github/workflows/sync.yml](.github/workflows/sync.yml) 到你的仓库)
-2. 改 workflow 顶部的 `SRC` 和 `TAGS` 为你要同步的官方镜像与 tag
-3. 改「Sync changed tags」步骤里的 `DST` 环境变量,指向 `docker.io/<你的用户名>/<仓库名>`
+2. 改 workflow 顶部的 `SRC`、`MOVING_TAGS`、`VERSION_KEEP` 为你要同步的官方镜像与 tag 规则
+3. 改两个同步步骤里的 `DST` 环境变量,指向 `docker.io/<你的用户名>/<仓库名>`
 4. 到仓库 Settings → Secrets and variables → Actions 添加:
    - `DOCKERHUB_USERNAME` — Docker Hub 用户名
-   - `DOCKERHUB_TOKEN` — Docker Hub Access Token(Account Settings → Security → New Access Token,Read/Write 权限)
+   - `DOCKERHUB_TOKEN` — Docker Hub Access Token(Account Settings → Security → New Access Token,**Read, Write & Delete** 权限;网页 API 改描述需要 Delete 位)
 5. 推送即首同步,之后每天 UTC 05:17 自动比对更新
 
 注意事项:
