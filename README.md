@@ -24,11 +24,18 @@ ghcr.io 访问不稳的环境,直接拉这个就行。
 | --- | --- |
 | `latest` | 最新 release(移动标签) |
 | `stable` | Stable 渠道对应镜像(移动标签) |
-| `0.1.xxxx` | 版本号标签,保留**最近 10 个**,新版本自动补同步 |
+| `0.1.xxxx` | 版本号标签,双轨保留,超出自动删除 |
 
-不同步:`daily`(与 latest 高度重合)、`edge`(随 main 每次提交变动,太频繁)、
-更早的历史版本(每个版本约几十 MB,全量回填不现实;如需某个老版本,改大
-workflow 里的 `VERSION_KEEP` 再手动触发一次即可)。
+版本号标签按两条轨道保留,各 5 个:
+
+- **latest 轨道**:上游最近 5 个 release 的版本号
+- **stable 轨道**:最近 5 个 stable 渠道版本(上游不提供历史,由
+  `stable-history.json` 每天记录,初期只有一个,之后逐周积累)
+
+保留集合之外的版本号标签会被自动删除(`latest`/`stable` 永不删除)。
+不同步 `daily`(与 latest 高度重合)和 `edge`(随 main 每次提交变动,太频繁)。
+
+调整窗口大小:改 workflow 顶部的 `VERSION_KEEP` / `STABLE_KEEP`。
 
 ## 自己搭一个同样的
 

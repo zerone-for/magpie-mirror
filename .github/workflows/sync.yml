@@ -14,7 +14,9 @@ permissions:
 env:
   SRC: ghcr.io/yetone/magpie
   MOVING_TAGS: latest stable # 跟随上游移动的 tag;edge 更新太频繁,不同步
-  VERSION_KEEP: "10"         # 保留最近多少个版本号 tag(0.1.xxxx),用于回滚
+  VERSION_KEEP: "5"          # latest 轨道:保留最近多少个版本号 tag
+  STABLE_KEEP: "5"           # stable 轨道:保留最近多少个 stable 版本 tag
+  STABLE_FEED: https://usemagpie.ai/api/latest?channel=stable
 
 jobs:
   sync:
@@ -64,24 +66,83 @@ jobs:
             skopeo copy --all --retry-times 5 "$SRC_REF" "$DST_REF"
           done
 
-      # 版本号 tag(如 0.1.1150):只补最近 VERSION_KEEP 个中缺失的,已同步的不重复搬
-      - name: Sync recent version tags
+      # 上游不提供 stable 版本历史,每天把当前 stable 版本记进 stable-history.json
+      - name: Record stable version history
+        run: |
+          set -euo pipefail
+          V=$(curl -fsS --retry 3 --max-time 30 "$STABLE_FEED" | jq -r '.version // empty' || true)
+          if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::stable feed 未返回有效版本($V),本次跳过记录"
+            exit 0
+          fi
+          [ -f stable-history.json ] || echo '[]' > stable-history.json
+          jq --arg v "$V" --argjson n "$STABLE_KEEP" \
+            'if index($v) then . else (. + [$v])[-$n:] end' \
+            stable-history.json > stable-history.tmp && mv stable-history.tmp stable-history.json
+          if ! git diff --quiet -- stable-history.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add stable-history.json
+            git commit -m "chore: record stable version $V [skip ci]"
+            git push
+          fi
+
+      # 双轨保留:latest 轨道最近 VERSION_KEEP 个 + stable 轨道最近 STABLE_KEEP 个
+      - name: Sync version tags
         env:
           DST: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/magpie
         run: |
           set -euo pipefail
-          SRC_VERSIONS=$(skopeo list-tags "docker://$SRC" | jq -r '.Tags[]' \
-            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n "$VERSION_KEEP")
+          SRC_VERSIONS=$(skopeo list-tags "docker://$SRC" | jq -r '.Tags[]?' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+          LATEST_TRACK=$(echo "$SRC_VERSIONS" | tail -n "$VERSION_KEEP")
+          STABLE_TRACK=$(jq -r '.[]' stable-history.json 2>/dev/null \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          printf '%s\n%s\n' "$LATEST_TRACK" "$STABLE_TRACK" | sed '/^$/d' | sort -u > keep-tags.txt
+          echo "保留集合:"; cat keep-tags.txt
+
           HUB_TAGS=$(skopeo list-tags "docker://$DST" 2>/dev/null | jq -r '.Tags[]?' || true)
-          MISSING=$(comm -23 <(echo "$SRC_VERSIONS" | sort) <(echo "$HUB_TAGS" | sort))
-          echo "上游最近版本: $(echo $SRC_VERSIONS | tr '\n' ' ')"
+          MISSING=$(comm -23 keep-tags.txt <(echo "$HUB_TAGS" | sed '/^$/d' | sort))
           if [ -z "$MISSING" ]; then
-            echo "::notice::最近版本号均已同步"
+            echo "::notice::保留集合内的版本均已同步"
             exit 0
           fi
           for TAG in $MISSING; do
             echo "::notice::补同步版本 $TAG"
             skopeo copy --all --retry-times 5 "docker://$SRC:$TAG" "docker://$DST:$TAG"
+          done
+
+      # 删除保留集合之外的版本号标签;latest/stable 等非版本号标签永不触碰
+      - name: Prune old version tags
+        env:
+          DST: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/magpie
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          HUB_VERSIONS=$(skopeo list-tags "docker://$DST" | jq -r '.Tags[]?' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort)
+          TO_DELETE=$(comm -23 <(echo "$HUB_VERSIONS") <(sort keep-tags.txt) || true)
+          if [ -z "$TO_DELETE" ]; then
+            echo "::notice::没有需要删除的旧版本"
+            exit 0
+          fi
+          ACCESS=$(curl -s -H "Content-Type: application/json" \
+            -d "{\"identifier\":\"$DOCKERHUB_USERNAME\",\"secret\":\"$DOCKERHUB_TOKEN\"}" \
+            https://hub.docker.com/v2/auth/token | jq -r .access_token)
+          if [ -z "$ACCESS" ] || [ "$ACCESS" = "null" ]; then
+            echo "::error::Docker Hub API 登录失败,无法删除旧标签"
+            exit 1
+          fi
+          for TAG in $TO_DELETE; do
+            HTTP=$(curl -s -o /tmp/del.json -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer $ACCESS" \
+              "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/magpie/tags/$TAG/")
+            if [ "$HTTP" = "200" ] || [ "$HTTP" = "204" ] || [ "$HTTP" = "404" ]; then
+              echo "::notice::已删除旧版本 $TAG (HTTP $HTTP)"
+            else
+              echo "::warning::删除 $TAG 失败 HTTP $HTTP: $(cat /tmp/del.json)"
+            fi
           done
 
       # 仅推代码时同步镜像页描述;每日定时跑时不重复
